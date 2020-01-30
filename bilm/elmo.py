@@ -1,7 +1,7 @@
 import tensorflow as tf
 
 
-def weight_layers(name, bilm_ops, l2_coef=None,
+def weight_layers(name, bilm_ops, l2_coef=0.0,
                   use_top_only=False, do_layer_norm=False):
     """
     Weight the layers of a biLM with trainable scalar weights to
@@ -31,10 +31,7 @@ def weight_layers(name, bilm_ops, l2_coef=None,
     """
 
     def _l2_regularizer(weights):
-        if l2_coef is not None:
-            return l2_coef * tf.reduce_sum(tf.square(weights))
-        else:
-            return 0.0
+        return l2_coef * tf.reduce_sum(tf.square(weights))
 
     # Get ops for computing LM embeddings and mask
     lm_embeddings = bilm_ops['lm_embeddings']
@@ -85,9 +82,9 @@ def weight_layers(name, bilm_ops, l2_coef=None,
             pieces = []
             for w, t in zip(normed_weights, layers):
                 if do_layer_norm:
-                    pieces.append(w * _do_ln(tf.squeeze(t, squeeze_dims=1)))
+                    pieces.append(w * _do_ln(tf.squeeze(t, axis=1)))
                 else:
-                    pieces.append(w * tf.squeeze(t, squeeze_dims=1))
+                    pieces.append(w * tf.squeeze(t, axis=1))
             sum_pieces = tf.add_n(pieces)
 
             # get the regularizer 

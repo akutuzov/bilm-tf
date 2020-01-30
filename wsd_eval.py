@@ -150,7 +150,7 @@ if __name__ == '__main__':
         emb_model = load_word2vec_embeddings(args.w2v)
         eval_scores = classify(data_path, w2v=emb_model)
     elif args.elmo:
-        emb_model = load_elmo_embeddings(args.elmo)
+        emb_model = load_elmo_embeddings(args.elmo, top=True)
         eval_scores = classify(data_path, elmo=emb_model)
     else:
         eval_scores = classify(data_path)

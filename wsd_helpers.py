@@ -179,8 +179,13 @@ def load_word2vec_embeddings(embeddings_file):
     return emb_model
 
 
-def load_elmo_embeddings(directory):
-    vocab_file = os.path.join(directory, 'vocab.txt.gz')
+def load_elmo_embeddings(directory, top=True):
+    if os.path.isfile(os.path.join(directory, 'vocab.txt.gz')):
+        vocab_file = os.path.join(directory, 'vocab.txt.gz')
+    elif os.path.isfile(os.path.join(directory, 'vocab.txt')):
+        vocab_file = os.path.join(directory, 'vocab.txt')
+    else:
+        raise SystemExit('Error: no vocabulary file found in the directory.')
     options_file = os.path.join(directory, 'options.json')
     weight_file = os.path.join(directory, 'model.hdf5')
 
@@ -200,7 +205,7 @@ def load_elmo_embeddings(directory):
     # Our model includes ELMo at both the input and output layers
     # of the task GRU, so we need 2x ELMo representations at each of the input and output.
 
-    elmo_sentence_input = weight_layers('input', sentence_embeddings_op, use_top_only=True)
+    elmo_sentence_input = weight_layers('input', sentence_embeddings_op, use_top_only=top)
     return batcher, sentence_character_ids, elmo_sentence_input
 
 
