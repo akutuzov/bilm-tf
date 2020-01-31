@@ -10,11 +10,14 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.model_selection import cross_validate
 from wsd_helpers import *
 import random
+import torch
+from torch.utils.data import DataLoader
+import transformers as ppb # pytorch transformers
 
 warnings.filterwarnings("ignore")
 
 
-def classify(data_file, w2v=None, elmo=None, max_batch_size=30, algo='logreg'):
+def classify(data_file, w2v=None, elmo=None, bert=None, max_batch_size=30, algo='logreg'):
     data, mfs_dic = load_dataset(data_file)
     scores = []
     f_scores = []
@@ -44,6 +47,53 @@ def classify(data_file, w2v=None, elmo=None, max_batch_size=30, algo='logreg'):
                     x_train += get_elmo_vector(
                         sess, chunk_sentences, batcher, sentence_character_ids,
                         elmo_sentence_input, chunk_nums)
+        elif bert:
+            tokenizer, model = bert
+            word_id = tokenizer.convert_tokens_to_ids(word)
+            if word_id == 100:
+                print('=====')
+                print('%s: WORD NOT IN VOCABULARY!' % word, word_id)
+                print('=====')
+                continue
+
+            tokenized = [tokenizer.encode(el[0], add_special_tokens=True) for el in data[word]]
+            word_forms = [el[0].split()[el[1]] for el in data[word]]
+            word_ids = tokenizer.convert_tokens_to_ids(word_forms)
+            word_positions = []
+            for sent, word_id, word_form in zip(tokenized, word_ids, word_forms):
+                try:
+                    position = sent.index(word_id)
+                    word_positions.append(position)
+                except ValueError:
+                    word_positions.append(None)
+            y = [el[2] for el in data[word]]
+            print('=====')
+            print('%s: %d sentences total' % (word, len(tokenized)), word_id)
+            print('=====')
+
+            print('Padding...', file=sys.stderr)
+            max_len = 0
+            for i in tokenized:
+                if len(i) > max_len:
+                    max_len = len(i)
+            print('Max length:', max_len)
+            padded = [i + [0]*(max_len-len(i)) for i in tokenized]
+
+            input_ids = torch.tensor(np.array(padded)).to('cuda')
+
+            loader = DataLoader(input_ids, batch_size=150, shuffle=False)
+            last_hidden_states = []
+            with torch.no_grad():
+                for i in loader:
+                    last_hidden_states.append(model(i))
+            last_hidden_states = torch.cat([i[0] for i in last_hidden_states], 0)
+            print('BERT output shape:', last_hidden_states.shape, file=sys.stderr)
+
+            for nr, row in enumerate(last_hidden_states.cpu().numpy()):
+                pos = word_positions[nr]
+                if pos:
+                    x_train.append(row[pos, :])
+
         else:
             print('=====')
             print('%s' % word)
@@ -74,7 +124,7 @@ def classify(data_file, w2v=None, elmo=None, max_batch_size=30, algo='logreg'):
 
         classes = Counter(y)
         print('Distribution of classes in the whole sample:', dict(classes))
-
+        print('Training sentences:', len(x_train))
         if algo == 'logreg':
             clf = LogisticRegression(
                 solver='lbfgs', max_iter=1000, multi_class='auto', class_weight='balanced')
@@ -140,6 +190,7 @@ if __name__ == '__main__':
     arg('--input', help='Path to tab-separated file with WSD data', required=True)
     arg('--w2v', help='Path to word2vec model (optional)')
     arg('--elmo', help='Path to ELMo model (optional)')
+    arg('--bert', help='Path to BERT model (optional)')
     parser.set_defaults(w2v=False)
     parser.set_defaults(elmo=False)
 
@@ -152,5 +203,10 @@ if __name__ == '__main__':
     elif args.elmo:
         emb_model = load_elmo_embeddings(args.elmo, top=True)
         eval_scores = classify(data_path, elmo=emb_model)
+    elif args.bert:
+        model_class, tokenizer_class, pretrained_weights = (ppb.BertModel, ppb.BertTokenizer, args.bert)
+        tokenizer = tokenizer_class.from_pretrained(pretrained_weights)
+        model = model_class.from_pretrained(pretrained_weights).to('cuda')
+        eval_scores = classify(data_path, bert=(tokenizer, model))
     else:
         eval_scores = classify(data_path)
