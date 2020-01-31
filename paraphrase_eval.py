@@ -13,10 +13,13 @@ from wsd_helpers import *
 import random
 import pandas as pd
 import numpy as np
+import torch
+from torch.utils.data import DataLoader
+import transformers as ppb # pytorch transformers
 warnings.filterwarnings("ignore")
 
 
-def classify(data_file, w2v=None, elmo=None, max_batch_size=300, algo='logreg'):
+def classify(data_file, w2v=None, elmo=None, bert=None, max_batch_size=300, algo='logreg'):
     data = pd.read_csv(data_file, sep='\t', compression='gzip')
     print(data.head())
 
@@ -40,11 +43,48 @@ def classify(data_file, w2v=None, elmo=None, max_batch_size=300, algo='logreg'):
             for chunk in divide_chunks(sentences1, max_batch_size):
                 train1 += get_elmo_vector_average(sess, chunk, batcher, sentence_character_ids, elmo_sentence_input)
 
+    elif bert:
+        tokenizer, model = bert
+        tokenized0 = data.text0.apply((lambda x: tokenizer.encode(x, add_special_tokens=True)))
+        tokenized1 = data.text1.apply((lambda x: tokenizer.encode(x, add_special_tokens=True)))
+
+        print('Padding...', file=sys.stderr)
+        max_len = 0
+        for i in tokenized0.values + tokenized1.values:
+            if len(i) > max_len:
+                max_len = len(i)
+        print('Max length:', max_len)
+
+        padded0 = [i + [0]*(max_len-len(i)) for i in tokenized0.values]
+        padded1 = [i + [0]*(max_len-len(i)) for i in tokenized1.values]
+
+        input_ids0 = torch.tensor(np.array(padded0)).to('cuda')
+        input_ids1 = torch.tensor(np.array(padded1)).to('cuda')
+
+        features = []
+        for inp in [input_ids0, input_ids1]:
+            loader = DataLoader(inp, batch_size=256, shuffle=False)
+            last_hidden_states = []
+            with torch.no_grad():
+                for i in loader:
+                    last_hidden_states.append(model(i))
+            last_hidden_states = torch.cat([i[0] for i in last_hidden_states], 0)
+            print('BERT output shape:', last_hidden_states.shape, file=sys.stderr)
+
+            # Slice the output for the first position for all the sequences, take all hidden unit outputs
+            # features.append(last_hidden_states[:,0,:].cpu().numpy())
+
+            # Take the average embedding for all the sequences:
+            features.append([np.mean(row, axis=0) for row in last_hidden_states.cpu().numpy()])
+
+        train0 = features[0]
+        train1 = features[1]
+
     classes = Counter(y)
     print('Distribution of classes in the whole sample:', dict(classes))
 
     x_train = [[np.dot(t0, t1)] for t0, t1 in zip(train0, train1)]
-    # print('Train entry shape:', x_train[0].shape)
+    print('Train shape:', len(x_train))
 
     if algo == 'logreg':
         clf = LogisticRegression(solver='lbfgs', max_iter=2000, multi_class='auto', class_weight='balanced')
@@ -92,7 +132,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     arg = parser.add_argument
     arg('--input', help='Path to tab-separated file with paraphrase data', required=True)
-    arg('--w2v', help='Path to word2vec model (optional)')
+    arg('--bert', help='Path to BERT model (optional)')
     arg('--elmo', help='Path to ELMo model (optional)')
     parser.set_defaults(w2v=False)
     parser.set_defaults(elmo=False)
@@ -100,9 +140,11 @@ if __name__ == '__main__':
     args = parser.parse_args()
     data_path = args.input
 
-    if args.w2v:
-        emb_model = load_word2vec_embeddings(args.w2v)
-        eval_scores = classify(data_path, w2v=emb_model)
+    if args.bert:
+        model_class, tokenizer_class, pretrained_weights = (ppb.BertModel, ppb.BertTokenizer, args.bert)
+        tokenizer = tokenizer_class.from_pretrained(pretrained_weights)
+        model = model_class.from_pretrained(pretrained_weights).to('cuda')
+        eval_scores = classify(data_path, bert=(tokenizer, model))
     elif args.elmo:
         emb_model = load_elmo_embeddings(args.elmo, top=False)
         eval_scores = classify(data_path, elmo=emb_model)
